@@ -61,8 +61,19 @@ export async function getClaim(claimId: string): Promise<Claim> {
   return res.json()
 }
 
+export interface TraceEvent {
+  agent: string
+  type: 'tool_call' | 'subagent_result'
+  tool?: string
+  input?: Record<string, unknown>
+  output?: unknown
+  source?: 'internal' | 'mcp'
+  summary?: string
+}
+
 export interface AnalysisResult {
   analysis: string
+  trace: TraceEvent[]
   analyzed_at: string
   cached: boolean
 }

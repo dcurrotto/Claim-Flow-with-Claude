@@ -129,6 +129,8 @@ Resources:
       Environment:
         Variables:
           COGNITO_USER_POOL_ID: !Ref UserPool
+          ANTHROPIC_API_KEY: !Sub '{{resolve:secretsmanager:${SystemName}-anthropic-api-key-${EnvironmentName}}}'
+          WEATHER_MCP_URL: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}/mcp-weather/mcp
       Policies:
         - DynamoDBCrudPolicy:
             TableName: ClaimFlowMainEntry
@@ -165,6 +167,26 @@ Resources:
             RestApiId: !Ref Api
             Path: /public/claims
             Method: POST
+            Auth:
+              Authorizer: NONE
+
+  # Standalone MCP server the Loss Verification subagent calls over HTTP —
+  # a separate Lambda so the call is a genuine remote MCP integration, not
+  # an in-process function call. No auth: it only serves public weather
+  # data, nothing claim-specific crosses this endpoint.
+  WeatherMcpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${SystemName}-weather-mcp-${EnvironmentName}
+      CodeUri: ../backend
+      Handler: weather_mcp.app.handler
+      Events:
+        WeatherMcpProxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /mcp-weather/{proxy+}
+            Method: ANY
             Auth:
               Authorizer: NONE
 

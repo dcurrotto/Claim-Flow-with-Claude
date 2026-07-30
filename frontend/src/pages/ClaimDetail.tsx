@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import Badge from '../components/ui/Badge'
-import { ArrowLeft, AlertTriangle, CheckCircle, Info, Sparkles, Loader } from 'lucide-react'
-import { analyzeClaim, getClaim, type Claim, type AnalysisResult } from '../api/claimApi'
+import { ArrowLeft, AlertTriangle, CheckCircle, Info, Sparkles, Loader, ChevronDown, ChevronRight, Wrench, RefreshCw } from 'lucide-react'
+import { analyzeClaim, getClaim, type Claim, type AnalysisResult, type TraceEvent } from '../api/claimApi'
 import Markdown from 'react-markdown'
 
 const TABS = ['Summary', 'Timeline', 'Policy / Coverage', 'Documents', 'Risk Flags'] as const
@@ -93,9 +93,62 @@ const dl: React.CSSProperties = {
 
 // ── AI Claims Analyst panel ────────────────────────────────────────────────
 
+function agentLabel(agent: string) {
+  if (agent === 'Coordinator') return <Badge variant="info">Coordinator</Badge>
+  if (agent === 'Fraud Risk Subagent') return <Badge variant="warning">Fraud Risk Subagent</Badge>
+  if (agent === 'Loss Verification Subagent') return <Badge variant="neutral">Loss Verification Subagent</Badge>
+  return <Badge variant="neutral">{agent}</Badge>
+}
+
+function AgentTrace({ trace }: { trace: TraceEvent[] }) {
+  const groups: { agent: string; events: TraceEvent[] }[] = []
+  for (const event of trace) {
+    const group = groups.find((g) => g.agent === event.agent)
+    if (group) group.events.push(event)
+    else groups.push({ agent: event.agent, events: [event] })
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {groups.map((group, i) => (
+        <div key={i}>
+          <div style={{ marginBottom: 6 }}>{agentLabel(group.agent)}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 4 }}>
+            {group.events.map((event, j) =>
+              event.type === 'tool_call' ? (
+                <div key={j} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 12, color: 'var(--color-text-muted)' }}>
+                  <Wrench size={12} style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span>
+                    <code style={{ color: 'var(--color-text)' }}>{event.tool}</code>
+                    {event.source === 'mcp' && (
+                      <span style={{ marginLeft: 6 }}>
+                        <Badge variant="success">MCP</Badge>
+                      </span>
+                    )}
+                    {typeof event.input === 'object' && event.input && Object.keys(event.input).length > 0 && (
+                      <span style={{ marginLeft: 6, fontFamily: 'monospace', fontSize: 11 }}>
+                        ({Object.entries(event.input).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ')})
+                      </span>
+                    )}
+                  </span>
+                </div>
+              ) : (
+                <div key={j} style={{ fontSize: 12, color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                  "{event.summary}"
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function AgentPanel({ claimId }: { claimId: string }) {
   const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [result, setResult] = useState<AnalysisResult | null>(null)
+  const [showTrace, setShowTrace] = useState(false)
 
   async function runAnalysis(force = false) {
     setStatus('loading')
@@ -123,12 +176,25 @@ function AgentPanel({ claimId }: { claimId: string }) {
     justifyContent: 'center',
   }
 
+  const reanalyzeStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 5,
+    fontSize: 14, border: 'none', background: 'none',
+    color: 'var(--color-accent)', cursor: 'pointer', padding: 0, fontWeight: 600,
+  }
+
+  const ReanalyzeButton = () => (
+    <button onClick={() => runAnalysis(true)} style={reanalyzeStyle}>
+      <RefreshCw size={14} />
+      Re-analyze
+    </button>
+  )
+
   return (
     <div style={{ ...card, borderLeft: '3px solid var(--color-accent, #6366f1)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
         <Sparkles size={16} color="var(--color-accent, #6366f1)" />
         <h3 style={{ ...sectionHead, margin: 0 }}>AI Claims Analyst</h3>
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--color-text-muted)' }}>Claude · Bedrock</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--color-text-muted)' }}>Claude · Multi-Agent</span>
       </div>
 
       {status === 'idle' && (
@@ -152,25 +218,42 @@ function AgentPanel({ claimId }: { claimId: string }) {
 
       {status === 'error' && (
         <p style={{ margin: 0, fontSize: 13, color: '#ef4444' }}>
-          Analysis failed. Check that the backend is running and Bedrock access is configured.
+          Analysis failed. Check that the backend is running and ANTHROPIC_API_KEY / WEATHER_MCP_URL are configured.
         </p>
       )}
 
       {status === 'done' && result && (
         <>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 0', marginBottom: 12, borderTop: '1px solid var(--color-border)', borderBottom: '1px solid var(--color-border)' }}>
+            <ReanalyzeButton />
+          </div>
+
           <div style={{ fontSize: 13, lineHeight: 1.75, color: 'var(--color-text)' }} className="agent-output">
             <Markdown>{result.analysis}</Markdown>
           </div>
+
+          {result.trace.length > 0 && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+              <button
+                onClick={() => setShowTrace((v) => !v)}
+                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, border: 'none', background: 'none', color: 'var(--color-text-muted)', cursor: 'pointer', padding: 0, fontWeight: 500 }}
+              >
+                {showTrace ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                Agent Trace ({result.trace.length} tool calls)
+              </button>
+              {showTrace && (
+                <div style={{ marginTop: 12 }}>
+                  <AgentTrace trace={result.trace} />
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--color-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>
               {result.cached ? 'Cached · ' : ''}{formatDate(result.analyzed_at)}
             </span>
-            <button
-              onClick={() => runAnalysis(true)}
-              style={{ fontSize: 12, border: 'none', background: 'none', color: 'var(--color-accent)', cursor: 'pointer', padding: 0, fontWeight: 500 }}
-            >
-              Re-analyze
-            </button>
+            <ReanalyzeButton />
           </div>
         </>
       )}
