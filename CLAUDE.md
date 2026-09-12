@@ -74,6 +74,8 @@ uvicorn weather_mcp.app:app --port 8001 --reload   # weather MCP server, run alo
 ```
 Health check: `http://localhost:8000/health`
 
+Note: the `requirements.txt` at the repo root is a stale leftover from an earlier Strands/Bedrock-based version of the agent (still lists `strands-agents`, `opentelemetry-*`, etc.) and does not reflect the current backend. Always install from `backend/requirements.txt`.
+
 ### Infrastructure (`cd infrastructure` first)
 ```
 sam build
@@ -163,26 +165,32 @@ Triage values: `straight-through`, `manual-review`, `siu`.
 - `IntakePage` — 3-step FNOL wizard (loss info → contact → review → confirmation)
 
 **Supporting:**
-- `src/auth/` — Cognito token exchange, localStorage helpers, JWT decode
+- `src/auth/` — Cognito token exchange, localStorage helpers, JWT decode (`cognito.ts`), env config (`config.ts`)
 - `src/hooks/useAuth.ts` — reads and parses the stored JWT; no side effects
+- `src/hooks/useUsers.ts` — fetches Cognito users (via `adminApi.ts`) for the Admin page
 - `src/components/layout/` — `AppShell` (sidebar + header shell), `Sidebar`, `Header`
-- `src/components/ui/` — primitive UI components (Button, Badge, Card, Input, EmptyState, Skeleton)
+- `src/components/ui/` — primitive UI components (Button, Badge, Card, Input, Modal, ConfirmModal, DatePicker, TimePicker, EmptyState, Skeleton)
 - `src/contexts/ThemeContext.tsx` — light/dark mode, accent color (5 options), sidebar color (5 options); all applied as CSS custom properties on `<html>`; persisted to `localStorage`
 - `src/styles/` — `tokens.css` defines all CSS variables, `layout.css` handles the app shell layout, `ui.css` styles UI primitives
-- `src/api/claimApi.ts` — typed API client for claim endpoints
+- `src/api/client.ts` — shared `apiFetch<T>()` helper: attaches the Cognito bearer token, reads `VITE_API_URL`, normalizes error responses
+- `src/api/claimApi.ts` — typed API client for claim endpoints, built on `client.ts`
+- `src/api/adminApi.ts` — `listUsers()`, calling `GET /admin/users`
+
+`src/pages/Home.tsx` is an unrouted leftover from the original Cognito/Vite starter template — not reachable from `App.tsx`, safe to ignore or remove.
 
 ### Backend Structure
 `backend/api/app.py` is the FastAPI entry point with Mangum adapter (`handler` = Lambda entrypoint).
 
 **Routers** (all in `backend/api/`):
 - `claim_api.py` — `GET /claims`, `GET /claims/{id}`, `PUT /claims/{id}/status` (authenticated); `POST /public/claims` (unauthenticated)
-- `admin_api.py` — admin-only operations
-- `agent_api.py` — `POST /agent/analyze/{claim_id}` — triggers the Strands agent claim analysis (see [AI Claims Analyst](#ai-claims-analyst-backendservicesclaims_agent_servicepy))
+- `admin_api.py` — `GET /admin/users`: lists Cognito users with group membership, calling `cognito-idp:ListUsers`/`ListUsersInGroup` directly via boto3. Intentional exception to the repository-layer convention below — user data lives in Cognito, not DynamoDB.
+- `agent_api.py` — `POST /agent/analyze/{claim_id}` — triggers the coordinator/subagent claim analysis (see [AI Claims Analyst](#ai-claims-analyst-backendservicesclaims_agent_servicepy))
 
 **Layers:**
 - `backend/repository/main_entry_repository.py` — all DynamoDB access; defines `EntityType` enum (includes `CLAIM`)
 - `backend/services/claims_agent_service.py` — the coordinator/subagent agent logic behind `agent_api.py`
 - `backend/weather_mcp/` — standalone MCP server (own Lambda, `WeatherMcpFunction`) wrapping Open-Meteo; called by the Loss Verification subagent over HTTP
+- `backend/post_confirmation.py` — Cognito post-confirmation Lambda trigger (`PostConfirmationFunction`); auto-adds every newly confirmed user to the `Users` group
 
 Auth: API Gateway Cognito Authorizer protects all routes by default. Public routes (`POST /public/claims`, `/health`) bypass the authorizer via explicit SAM event entries with `Auth: Authorizer: NONE`.
 
@@ -190,10 +198,14 @@ Auth: API Gateway Cognito Authorizer protects all routes by default. Public rout
 `infrastructure/template.yaml` provisions:
 - **Cognito User Pool** with `Admins` and `Users` groups, email-based sign-in, invite-only
 - **Cognito User Pool Client** (no secret, SRP auth)
+- **PostConfirmationFunction** — Lambda wired as the User Pool's `PostConfirmation` trigger
 - **API Gateway** with Cognito Authorizer as default
-- **API Lambda** running the FastAPI app
+- **API Lambda** (`ApiFunction`) running the FastAPI app
+- **WeatherMcpFunction** — separate Lambda hosting the weather MCP server, routed at `/mcp-weather/{proxy+}`, `Auth: NONE`
 - **DynamoDB** — `ClaimFlowMainEntry` table (single-table design)
 - **CloudFront + S3** — hosts the compiled frontend SPA
+
+Stack parameters accept only `qa` and `prod` for `EnvironmentName` — there is no deployed `dev` SAM stack; dev is local-only (see AWS Account & Environment Strategy above).
 
 ## Environment Variables
 
@@ -212,6 +224,8 @@ VITE_API_URL=              # backend API base URL
 Backend reads from Lambda environment variables (set in SAM template):
 ```
 COGNITO_USER_POOL_ID=
+ANTHROPIC_API_KEY=   # ApiFunction only; injected via a Secrets Manager dynamic reference, not set directly
+WEATHER_MCP_URL=     # ApiFunction only; points at WeatherMcpFunction's /mcp-weather/mcp path
 ```
 
 ## Key Conventions
@@ -221,4 +235,5 @@ COGNITO_USER_POOL_ID=
 - **Single-table DynamoDB** — all entities share one table; always use the repository layer, never raw boto3 calls from routers.
 - **Two Cognito groups** — `Admins` (elevated UI, admin nav visible) and `Users` (default for all authenticated users). Group membership comes from `cognito:groups` in the JWT.
 - **Public routes** — the FNOL intake wizard and `POST /public/claims` are fully unauthenticated. Must be declared with `Auth: Authorizer: NONE` in SAM template events.
-- **Invite-only auth** — users are created by admins only; there is no self-registration flow.
+- **Invite-only auth** — users are created by admins only; group assignment on confirmation is automatic via `post_confirmation.py`, not manual.
+- **No automated test suite** — no pytest/vitest/jest config or test files exist in this repo.
