@@ -16,6 +16,7 @@ This project exists to demonstrate a production-shaped agentic AI system on AWS:
 - **Claimants** submit a loss report through a fully public, unauthenticated 3-step intake wizard — no account required.
 - Every submitted claim is **auto-triaged** by server-side rules into one of three handling paths.
 - Adjusters can trigger a **coordinator agent** — calling directly into the Anthropic API — that delegates to a fraud-risk subagent and a loss-verification subagent, then produces a structured recommendation: triage decision, risk assessment, weather verification, next steps, and missing information.
+- **Admins** (a Cognito group) get a read-only user directory — every registered user, their group membership, and account status, pulled live from Cognito.
 
 ## Highlights
 
@@ -23,7 +24,7 @@ This project exists to demonstrate a production-shaped agentic AI system on AWS:
 - A hand-rolled **coordinator + subagents** architecture on the direct Anthropic API (Claude Sonnet) — no agent framework, just the Messages API tool-use loop, so the mechanics stay fully visible.
 - One subagent calls a **standalone MCP server** (its own Lambda) that wraps a free historical-weather API, to fact-check weather-related claims against what actually happened.
 - Auto-triage rules at intake plus cached AI analyses — including the full multi-agent tool-call trace — on claim records.
-- Three environments (dev, QA, prod) each with separate auth and data stacks.
+- Three environments (dev, QA, prod) — QA and prod are separate deployed SAM stacks with their own Cognito pool and DynamoDB table; dev runs locally against its own Cognito/DynamoDB resources outside of SAM.
 - Frontend React/Vite SPA with public FNOL wizard and authenticated adjuster dashboard, including a collapsible agent-trace view.
 
 ## Architecture
@@ -58,10 +59,11 @@ flowchart LR
     Coord --> FraudSub[Fraud Risk Subagent]
     Coord --> WeatherSub[Loss Verification Subagent]
     FraudSub --> Claude
+    FraudSub --> DDB
     WeatherSub --> Claude
+    WeatherSub --> DDB
     WeatherSub -->|MCP over HTTP| MCPLambda[Weather MCP Lambda]
     MCPLambda --> OpenMeteo[(Open-Meteo API)]
-    Coord --> DDB
 ```
 
 ## Agentic Claim Analysis
@@ -75,6 +77,8 @@ The centerpiece of this project is a small but real multi-agent system — not a
 - **Loss Verification subagent** — tools: `get_claim_details` plus two tools discovered dynamically from a **standalone MCP server** (`backend/weather_mcp/`, its own Lambda) over HTTP: `geocode_location` and `get_historical_weather`, both backed by the free Open-Meteo API. This subagent checks whether a claimed weather event (storm, hurricane, flood, etc.) actually happened at the loss date and location — a genuine remote MCP integration, not an in-process function call.
 
 Every tool call across all three agents — internal or MCP-sourced — is recorded to a flat trace and returned alongside the analysis, powering the "Agent Trace" panel in the UI.
+
+For a turn-by-turn breakdown of every individual LLM call in a single analysis run, see [`design/ai-analyst-steps.md`](design/ai-analyst-steps.md) and the companion [`design/ai-analyst-diagram.md`](design/ai-analyst-diagram.md).
 
 ```mermaid
 sequenceDiagram
@@ -128,7 +132,7 @@ Applied automatically at intake, before any AI involvement (`backend/api/claim_a
 
 ## Environments
 
-Three environments — local dev, QA, and prod — deployed as separate AWS SAM stacks, each with its own Cognito pool, DynamoDB table, and API Gateway stage. See `CLAUDE.md` for deploy commands and full environment configuration.
+Three environments — local dev, QA, and prod. QA and prod are deployed as separate AWS SAM stacks, each with its own Cognito pool, DynamoDB table, and API Gateway stage; dev's Cognito pool and DynamoDB table exist outside of SAM, with the frontend and backend run locally against them. See `CLAUDE.md` for deploy commands and full environment configuration.
 
 ## Getting Started
 

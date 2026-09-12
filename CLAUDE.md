@@ -68,8 +68,8 @@ npm run preview      # preview production build
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app:app --reload                   # from backend/
-uvicorn backend.app:app --reload           # from repo root
+uvicorn api.app:app --reload               # from backend/
+uvicorn backend.api.app:app --reload       # from repo root
 uvicorn weather_mcp.app:app --port 8001 --reload   # weather MCP server, run alongside the API for AI Claims Analyst
 ```
 Health check: `http://localhost:8000/health`
